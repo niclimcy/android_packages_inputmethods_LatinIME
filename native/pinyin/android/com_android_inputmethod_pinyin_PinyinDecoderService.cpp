@@ -15,7 +15,7 @@
  */
 
 #include <assert.h>
-#include <cutils/log.h>
+#include <android/log.h>
 #include <jni.h>
 #include <string.h>
 #include <sys/types.h>
@@ -138,7 +138,8 @@ JNIEXPORT jstring JNICALL nativeImGetPyStr(JNIEnv* env, jclass jclazz,
   len = im_get_spl_start_pos(spl_start);
 
   size_t i;
-  for (i = 0; i < py_len; i++)
+  // Clamp to retbuf capacity; py_len is decoder-controlled but guard anyway.
+  for (i = 0; i < py_len && i < RET_BUF_LEN - 1; i++)
     retbuf[i] = py[i];
   retbuf[i] = (char16)'\0';
 
@@ -214,7 +215,7 @@ JNIEXPORT jboolean JNICALL nativeImFlushCache(JNIEnv *env, jclass clazz) {
 
 JNIEXPORT jint JNICALL nativeImGetPredictsNum(JNIEnv *env, jclass clazz,
                                               jstring fixed_str) {
-  char16 *fixed_ptr = (char16*)(*env).GetStringChars(fixed_str, false);
+  char16 *fixed_ptr = (char16*)(*env).GetStringChars(fixed_str, NULL);
   size_t fixed_len = (size_t)(*env).GetStringLength(fixed_str);
 
   char16 fixed_buf[kMaxPredictSize + 1];
@@ -388,11 +389,18 @@ static int registerNativeMethods(JNIEnv* env, const char* className,
     }
 
     clazz = env->FindClass("java/io/FileDescriptor");
-    LOG_FATAL_IF(clazz == NULL, "Unable to find Java class java.io.FileDescriptor");
+    if (clazz == NULL) {
+        __android_log_print(ANDROID_LOG_ERROR, "PinyinDecoder",
+                            "Unable to find Java class java.io.FileDescriptor");
+        return JNI_FALSE;
+    }
     gFileDescriptorOffsets.mClass = (jclass) env->NewGlobalRef(clazz);
     gFileDescriptorOffsets.mDescriptor = env->GetFieldID(clazz, "descriptor", "I");
-    LOG_FATAL_IF(gFileDescriptorOffsets.mDescriptor == NULL,
-                 "Unable to find descriptor field in java.io.FileDescriptor");
+    if (gFileDescriptorOffsets.mDescriptor == NULL) {
+        __android_log_print(ANDROID_LOG_ERROR, "PinyinDecoder",
+                            "Unable to find descriptor field in java.io.FileDescriptor");
+        return JNI_FALSE;
+    }
 
     return JNI_TRUE;
 }

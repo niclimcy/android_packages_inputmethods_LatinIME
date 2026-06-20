@@ -38,7 +38,10 @@ android_app {
 
     certificate: "shared",
 
-    jni_libs: ["libjni_latinime"],
+    jni_libs: [
+        "libjni_latinime",
+        "libjni_pinyinime",
+    ],
 
     static_libs: [
         "android-common",
@@ -50,7 +53,11 @@ android_app {
     ],
 
     // Do not compress dictionary files to mmap dict data runtime
-    aaptflags: ["-0 .dict"],
+    // (.dat is the Pinyin decoder dictionary, opened via openRawResourceFd)
+    aaptflags: [
+        "-0 .dict",
+        "-0 .dat",
+    ],
 
     // Include all the resources regardless of system supported locales
     aapt_include_all_resources: true,

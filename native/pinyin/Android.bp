@@ -1,0 +1,67 @@
+// Copyright (C) 2009 The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package {
+    default_applicable_licenses: ["packages_inputmethods_LatinIME_license"],
+}
+
+// Pinyin (Chinese) decoder engine ported from the unmaintained AOSP PinyinIME.
+// Isolated from libjni_latinime so the 2009-era code keeps its own relaxed
+// warning flags instead of inheriting LatinIME's -Werror -Weffc++ set.
+cc_library {
+    name: "libjni_pinyinime",
+    product_specific: true,
+
+    sdk_version: "14",
+    cflags: [
+        "-Wno-error",
+        "-Wno-unused-parameter",
+        "-Wno-unused-function",
+        "-Wno-unused-variable",
+        "-Wno-sign-compare",
+        "-Wno-missing-field-initializers",
+        "-Wno-format",
+        // char is unsigned on arm, signed on x86; the decoder assumes signed.
+        "-fsigned-char",
+    ],
+    header_libs: ["jni_headers"],
+    shared_libs: ["liblog"],
+    local_include_dirs: ["include"],
+
+    srcs: [
+        "android/com_android_inputmethod_pinyin_PinyinDecoderService.cpp",
+        "share/dictbuilder.cpp",
+        "share/dictlist.cpp",
+        "share/dicttrie.cpp",
+        "share/lpicache.cpp",
+        "share/matrixsearch.cpp",
+        "share/mystdlib.cpp",
+        "share/ngram.cpp",
+        "share/pinyinime.cpp",
+        "share/searchutility.cpp",
+        "share/spellingtable.cpp",
+        "share/spellingtrie.cpp",
+        "share/splparser.cpp",
+        "share/userdict.cpp",
+        "share/utf16char.cpp",
+        "share/utf16reader.cpp",
+        "share/sync.cpp",
+    ],
+
+    target: {
+        android: {
+            stl: "libc++_static",
+        },
+    },
+}

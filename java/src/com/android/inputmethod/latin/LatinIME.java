@@ -922,6 +922,7 @@ public class LatinIME extends InputMethodService implements KeyboardActionListen
         mRichImm.onSubtypeChanged(subtype);
         mInputLogic.onSubtypeChanged(SubtypeLocaleUtils.getCombiningRulesExtraValue(subtype),
                 mSettings.getCurrent());
+        updatePinyinMode();
         loadKeyboard();
     }
 
@@ -1110,7 +1111,15 @@ public class LatinIME extends InputMethodService implements KeyboardActionListen
                 currentSettingsValues.mGestureTrailEnabled,
                 currentSettingsValues.mGestureFloatingPreviewTextEnabled);
 
+        updatePinyinMode();
+
         if (TRACE) Debug.startMethodTracing("/data/trace/latinime");
+    }
+
+    private void updatePinyinMode() {
+        final Locale locale = mRichImm.getCurrentSubtypeLocale();
+        final boolean isPinyin = locale != null && "zh".equals(locale.getLanguage());
+        mInputLogic.setPinyinMode(isPinyin);
     }
 
     @Override
@@ -1688,9 +1697,11 @@ public class LatinIME extends InputMethodService implements KeyboardActionListen
 
         final boolean shouldShowImportantNotice =
                 ImportantNoticeUtils.shouldShowImportantNotice(this, currentSettingsValues);
-        final boolean shouldShowSuggestionCandidates =
-                currentSettingsValues.mInputAttributes.mShouldShowSuggestions
-                && currentSettingsValues.isSuggestionsEnabledPerUserSettings();
+        // Pinyin needs the candidate strip even where suggestions are suppressed.
+        final boolean pinyinMode = mInputLogic.isPinyinMode();
+        final boolean shouldShowSuggestionCandidates = pinyinMode
+                || (currentSettingsValues.mInputAttributes.mShouldShowSuggestions
+                && currentSettingsValues.isSuggestionsEnabledPerUserSettings());
         final boolean shouldShowSuggestionsStripUnlessPassword = shouldShowImportantNotice
                 || currentSettingsValues.mShowsVoiceInputKey
                 || shouldShowSuggestionCandidates
@@ -1718,7 +1729,8 @@ public class LatinIME extends InputMethodService implements KeyboardActionListen
             }
         }
 
-        if (currentSettingsValues.isSuggestionsEnabledPerUserSettings()
+        if (pinyinMode
+                || currentSettingsValues.isSuggestionsEnabledPerUserSettings()
                 || currentSettingsValues.isApplicationSpecifiedCompletionsOn()
                 // We should clear the contextual strip if there is no suggestion from dictionaries.
                 || noSuggestionsFromDictionaries) {

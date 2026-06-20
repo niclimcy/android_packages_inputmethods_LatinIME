@@ -47,6 +47,8 @@ import com.android.inputmethod.latin.SuggestedWords.SuggestedWordInfo;
 import com.android.inputmethod.latin.WordComposer;
 import com.android.inputmethod.latin.common.Constants;
 import com.android.inputmethod.latin.common.InputPointers;
+import com.android.inputmethod.pinyin.PinyinComposer;
+import com.android.inputmethod.pinyin.PinyinDecoder;
 import com.android.inputmethod.latin.common.StringUtils;
 import com.android.inputmethod.latin.define.DebugFlags;
 import com.android.inputmethod.latin.settings.SettingsValues;
@@ -60,6 +62,7 @@ import com.android.inputmethod.latin.utils.StatsUtils;
 import com.android.inputmethod.latin.utils.TextRange;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
@@ -108,6 +111,12 @@ public final class InputLogic {
     // The word being corrected while the cursor is in the middle of the word.
     // Note: This does not have a composing span, so it must be handled separately.
     private String mWordBeingCorrectedByCursor = null;
+
+    // Pinyin (Chinese) input. When the pinyin subtype is active, letter input is
+    // routed through the native decoder instead of the Latin suggestion pipeline.
+    private boolean mIsPinyinMode;
+    private final PinyinDecoder mPinyinDecoder = new PinyinDecoder();
+    private final PinyinComposer mPinyinComposer = new PinyinComposer(mPinyinDecoder);
 
     /**
      * Create a new instance of the input logic.
@@ -213,6 +222,9 @@ public final class InputLogic {
      * Clean up the input logic after input is finished.
      */
     public void finishInput() {
+        if (mIsPinyinMode) {
+            resetPinyinState();
+        }
         if (mWordComposer.isComposingWord()) {
             mConnection.finishComposingText();
             StatsUtils.onWordCommitUserTyped(
@@ -231,6 +243,80 @@ public final class InputLogic {
         mInputLogicHandler = InputLogicHandler.NULL_HANDLER;
         inputLogicHandler.destroy();
         mDictionaryFacilitator.closeDictionaries();
+        mPinyinDecoder.close();
+    }
+
+    /** Lazily opens the native decoder on first enable. */
+    public void setPinyinMode(final boolean enabled) {
+        if (enabled && !mPinyinDecoder.isInited()) {
+            mPinyinDecoder.open(mLatinIME);
+        }
+        if (mIsPinyinMode != enabled) {
+            mIsPinyinMode = enabled;
+            resetPinyinState();
+        }
+    }
+
+    public boolean isPinyinMode() {
+        return mIsPinyinMode;
+    }
+
+    private void resetPinyinState() {
+        if (!mPinyinComposer.isEmpty()) {
+            mConnection.finishComposingText();
+        }
+        mPinyinComposer.reset();
+    }
+
+    private static boolean isPinyinLetter(final int codePoint) {
+        return (codePoint >= 'a' && codePoint <= 'z')
+                || (codePoint >= 'A' && codePoint <= 'Z');
+    }
+
+    private void commitPinyinText(final String text) {
+        if (text != null && !text.isEmpty()) {
+            mConnection.commitText(text, 1);
+        } else {
+            mConnection.finishComposingText();
+        }
+        mPinyinComposer.reset();
+        mSuggestedWords = SuggestedWords.getEmptyInstance();
+        mSuggestionStripViewAccessor.setNeutralSuggestionStrip();
+    }
+
+    private void showPinyinSuggestions() {
+        final List<String> candidates = mPinyinComposer.getCandidates();
+        if (candidates.isEmpty()) {
+            mSuggestedWords = SuggestedWords.getEmptyInstance();
+            mSuggestionStripViewAccessor.setNeutralSuggestionStrip();
+            return;
+        }
+        final ArrayList<SuggestedWordInfo> infos = new ArrayList<>(candidates.size());
+        for (int i = 0; i < candidates.size(); i++) {
+            infos.add(new SuggestedWordInfo(candidates.get(i), "" /* prevWordsContext */,
+                    SuggestedWordInfo.MAX_SCORE - i, SuggestedWordInfo.KIND_CORRECTION,
+                    Dictionary.DICTIONARY_HARDCODED, SuggestedWordInfo.NOT_AN_INDEX,
+                    SuggestedWordInfo.NOT_A_CONFIDENCE));
+        }
+        final SuggestedWords words = new SuggestedWords(infos, null /* rawSuggestions */,
+                infos.get(0) /* typedWordInfo */, false /* typedWordValid */,
+                false /* willAutoCorrect */, false /* isObsoleteSuggestions */,
+                SuggestedWords.INPUT_STYLE_TYPING, SuggestedWords.NOT_A_SEQUENCE_NUMBER);
+        // Keep mSuggestedWords in sync so a manual pick can recover the candidate index.
+        mSuggestedWords = words;
+        mSuggestionStripViewAccessor.showSuggestionStrip(words);
+    }
+
+    private InputTransaction onPickPinyinCandidate(final SettingsValues settingsValues,
+            final SuggestedWordInfo suggestionInfo, final int keyboardShiftState) {
+        final Event event = Event.createSuggestionPickedEvent(suggestionInfo);
+        final InputTransaction inputTransaction = new InputTransaction(settingsValues,
+                event, SystemClock.uptimeMillis(), mSpaceState, keyboardShiftState);
+        inputTransaction.setDidAffectContents();
+        commitPinyinText(suggestionInfo.mWord);
+        mSpaceState = SpaceState.NONE;
+        inputTransaction.requireShiftUpdate(InputTransaction.SHIFT_UPDATE_NOW);
+        return inputTransaction;
     }
 
     /**
@@ -285,6 +371,9 @@ public final class InputLogic {
     public InputTransaction onPickSuggestionManually(final SettingsValues settingsValues,
             final SuggestedWordInfo suggestionInfo, final int keyboardShiftState,
             final int currentKeyboardScriptId, final LatinIME.UIHandler handler) {
+        if (mIsPinyinMode) {
+            return onPickPinyinCandidate(settingsValues, suggestionInfo, keyboardShiftState);
+        }
         final SuggestedWords suggestedWords = mSuggestedWords;
         final String suggestion = suggestionInfo.mWord;
         // If this is a punctuation picked from the suggestion strip, pass it to onCodeInput
@@ -733,6 +822,12 @@ public final class InputLogic {
             final InputTransaction inputTransaction,
             final LatinIME.UIHandler handler) {
         inputTransaction.setDidAffectContents();
+        if (mIsPinyinMode && !mPinyinComposer.isEmpty()
+                && Constants.CODE_ENTER == event.mCodePoint) {
+            // Enter commits the raw pinyin shown inline and is consumed.
+            commitPinyinText(mPinyinComposer.getComposingText());
+            return;
+        }
         switch (event.mCodePoint) {
             case Constants.CODE_ENTER:
                 final EditorInfo editorInfo = getCurrentInputEditorInfo();
@@ -809,6 +904,18 @@ public final class InputLogic {
     private void handleNonSeparatorEvent(final Event event, final SettingsValues settingsValues,
             final InputTransaction inputTransaction) {
         final int codePoint = event.mCodePoint;
+        if (mIsPinyinMode) {
+            if (isPinyinLetter(codePoint)) {
+                mPinyinComposer.addLetter((char) codePoint);
+                setComposingTextInternal(mPinyinComposer.getComposingText(), 1);
+                inputTransaction.setRequiresUpdateSuggestions();
+                return;
+            }
+            // A non-letter ends the composition, then is handled normally below.
+            if (!mPinyinComposer.isEmpty()) {
+                commitPinyinText(mPinyinComposer.getBestCandidate());
+            }
+        }
         // TODO: refactor this method to stop flipping isComposingWord around all the time, and
         // make it shorter (possibly cut into several pieces). Also factor
         // handleNonSpecialCharacterEvent which has the same name as other handle* methods but is
@@ -896,6 +1003,15 @@ public final class InputLogic {
             final LatinIME.UIHandler handler) {
         final int codePoint = event.mCodePoint;
         final SettingsValues settingsValues = inputTransaction.mSettingsValues;
+        if (mIsPinyinMode && !mPinyinComposer.isEmpty()) {
+            // Space is consumed; other separators are still emitted after committing.
+            commitPinyinText(mPinyinComposer.getBestCandidate());
+            if (Constants.CODE_SPACE != codePoint) {
+                sendKeyCodePoint(settingsValues, codePoint);
+            }
+            inputTransaction.requireShiftUpdate(InputTransaction.SHIFT_UPDATE_NOW);
+            return;
+        }
         final boolean wasComposingWord = mWordComposer.isComposingWord();
         // We avoid sending spaces in languages without spaces if we were composing.
         final boolean shouldAvoidSendingCode = Constants.CODE_SPACE == codePoint
@@ -1006,6 +1122,20 @@ public final class InputLogic {
             final int currentKeyboardScriptId) {
         mSpaceState = SpaceState.NONE;
         mDeleteCount++;
+
+        if (mIsPinyinMode && !mPinyinComposer.isEmpty()) {
+            mPinyinComposer.deleteLast();
+            if (mPinyinComposer.isEmpty()) {
+                mConnection.finishComposingText();
+                mSuggestedWords = SuggestedWords.getEmptyInstance();
+                mSuggestionStripViewAccessor.setNeutralSuggestionStrip();
+            } else {
+                setComposingTextInternal(mPinyinComposer.getComposingText(), 1);
+                inputTransaction.setRequiresUpdateSuggestions();
+            }
+            inputTransaction.requireShiftUpdate(InputTransaction.SHIFT_UPDATE_NOW);
+            return;
+        }
 
         // In many cases after backspace, we need to update the shift state. Normally we need
         // to do this right away to avoid the shift state being out of date in case the user types
@@ -1465,6 +1595,10 @@ public final class InputLogic {
         if (DebugFlags.DEBUG_ENABLED) {
             startTimeMillis = System.currentTimeMillis();
             Log.d(TAG, "performUpdateSuggestionStripSync()");
+        }
+        if (mIsPinyinMode) {
+            showPinyinSuggestions();
+            return;
         }
         // Check if we have a suggestion engine attached.
         if (!settingsValues.needsToLookupSuggestions()) {

@@ -233,6 +233,8 @@
     <!-- Description for English (US) keyboard subtype [CHAR LIMIT=25]
          (US) should be an abbreviation of United States to fit in the CHAR LIMIT. -->
     <string name="subtype_en_US">English (US)</string>
+    <!-- Description for Simplified Chinese (Pinyin) keyboard subtype [CHAR LIMIT=25] -->
+    <string name="subtype_zh_CN">Chinese (Simplified)</string>
     <!-- Description for Spanish (US) keyboard subtype [CHAR LIMIT=25]
          (US) should be an abbreviation of United States to fit in the CHAR LIMIT. -->
     <string name="subtype_es_US">Spanish (US)</string>
